@@ -10,7 +10,9 @@ const MAX_RESOURCE_TREE_ENTRIES = 6000;
 const PAGE_SIZE = 10;
 const MAX_TEXT_PREVIEW_BYTES = 256 * 1024;
 const MAX_IMAGE_PREVIEW_BYTES = 16 * 1024 * 1024;
+const MAX_ZIP_BYTES = 3.5 * 1024 * 1024 * 1024;
 const decoder = new TextDecoder("utf-8", { fatal: false });
+const encoder = new TextEncoder();
 const semanticTokens = [
   "cardart", "cardimage", "cardillustration", "cardportrait", "cardskin",
   "portrait", "illustration", "artwork", "replacement",
@@ -54,6 +56,7 @@ const elements = {
   resourcePreviewClose: document.querySelector("#resourcePreviewClose"),
   diagnosticList: document.querySelector("#diagnostics"),
   download: document.querySelector("#downloadButton"),
+  downloadResources: document.querySelector("#downloadResourcesButton"),
   copy: document.querySelector("#copyButton")
 };
 
@@ -89,6 +92,7 @@ elements.mappingPrev.addEventListener("click", () => { mappingPage -= 1; renderM
 elements.mappingNext.addEventListener("click", () => { mappingPage += 1; renderMappingTable(); });
 elements.resourcePreviewClose.addEventListener("click", closeResourcePreview);
 elements.download.addEventListener("click", downloadIndex);
+elements.downloadResources.addEventListener("click", downloadResourcesZip);
 elements.copy.addEventListener("click", copyIndex);
 
 async function loadModFolder(fileList) {
@@ -725,6 +729,142 @@ function mappingRow(mapping) {
     const cell = document.createElement("td"); cell.textContent = text; cell.className = className; row.append(cell);
   }
   return row;
+}
+
+async function downloadResourcesZip() {
+  const archive = currentResult?.archive;
+  if (!archive) return;
+  const skipped = [];
+  const files = [];
+  let totalBytes = 0;
+  for (const resource of currentResult.resources) {
+    if (resource.compressed) {
+      skipped.push(`${resource.path}（PCK 压缩条目，当前无法安全解压）`);
+      continue;
+    }
+    const entry = archive.byPath.get(resource.path.toLowerCase());
+    if (!entry) {
+      skipped.push(`${resource.path}（未找到原始 PCK 条目）`);
+      continue;
+    }
+    totalBytes += entry.size;
+    if (totalBytes > MAX_ZIP_BYTES) {
+      setStatus(`可导出的资源超过 ${formatBytes(MAX_ZIP_BYTES)}；当前本地 ZIP 不支持 ZIP64，为避免生成损坏文件已取消。`, true);
+      return;
+    }
+    files.push({ name: safeZipPath(resource.path), data: readEntry(archive, entry) });
+  }
+  if (files.length === 0) {
+    setStatus("没有可直接导出的未压缩 PCK 条目。", true);
+    return;
+  }
+  if (skipped.length > 0) {
+    files.push({
+      name: "__PCK_EXPORT_NOTES__.txt",
+      data: encoder.encode(`以下 ${skipped.length} 个条目未导出：\n${skipped.join("\n")}`)
+    });
+  }
+  elements.downloadResources.disabled = true;
+  try {
+    setStatus(`正在本地打包 ${files.length} 个资源为 ZIP…`);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const blob = createStoredZip(files);
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `${safeFileName(currentResult.file.name.replace(/\.pck$/i, ""))}-resources.zip`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 0);
+    setStatus(`资源 ZIP 已生成：${files.length} 个文件，${formatBytes(totalBytes)}。${skipped.length ? `另附 ${skipped.length} 个未导出条目的说明。` : ""}`);
+  } catch (error) {
+    setStatus(`资源 ZIP 生成失败：${error.message || "未知错误"}`, true);
+  } finally {
+    elements.downloadResources.disabled = false;
+  }
+}
+
+function createStoredZip(files) {
+  const chunks = [];
+  const centralDirectory = [];
+  let offset = 0;
+  const names = new Set();
+  for (const file of files) {
+    const name = uniqueZipPath(file.name, names);
+    const nameBytes = encoder.encode(name);
+    const data = file.data instanceof Uint8Array ? file.data : new Uint8Array(file.data);
+    if (nameBytes.length > 0xffff || data.byteLength > 0xffffffff || offset > 0xffffffff) throw new Error("ZIP 文件超过当前浏览器导出格式上限。");
+    const crc = crc32(data);
+    const local = new Uint8Array(30 + nameBytes.length);
+    const localView = new DataView(local.buffer);
+    localView.setUint32(0, 0x04034b50, true);
+    localView.setUint16(4, 20, true);
+    localView.setUint16(6, 0x0800, true);
+    localView.setUint16(8, 0, true);
+    localView.setUint32(14, crc, true);
+    localView.setUint32(18, data.byteLength, true);
+    localView.setUint32(22, data.byteLength, true);
+    localView.setUint16(26, nameBytes.length, true);
+    nameBytes && local.set(nameBytes, 30);
+    chunks.push(local, data);
+
+    const central = new Uint8Array(46 + nameBytes.length);
+    const centralView = new DataView(central.buffer);
+    centralView.setUint32(0, 0x02014b50, true);
+    centralView.setUint16(4, 20, true);
+    centralView.setUint16(6, 20, true);
+    centralView.setUint16(8, 0x0800, true);
+    centralView.setUint16(10, 0, true);
+    centralView.setUint32(16, crc, true);
+    centralView.setUint32(20, data.byteLength, true);
+    centralView.setUint32(24, data.byteLength, true);
+    centralView.setUint16(28, nameBytes.length, true);
+    centralView.setUint32(42, offset, true);
+    nameBytes && central.set(nameBytes, 46);
+    centralDirectory.push(central);
+    offset += local.byteLength + data.byteLength;
+  }
+  const centralSize = centralDirectory.reduce((total, entry) => total + entry.byteLength, 0);
+  if (offset + centralSize > 0xffffffff || files.length > 0xffff) throw new Error("ZIP 文件超过当前浏览器导出格式上限。");
+  const footer = new Uint8Array(22);
+  const footerView = new DataView(footer.buffer);
+  footerView.setUint32(0, 0x06054b50, true);
+  footerView.setUint16(8, files.length, true);
+  footerView.setUint16(10, files.length, true);
+  footerView.setUint32(12, centralSize, true);
+  footerView.setUint32(16, offset, true);
+  return new Blob([...chunks, ...centralDirectory, footer], { type: "application/zip" });
+}
+
+function safeZipPath(path) {
+  const result = String(path || "resource").replaceAll("\\", "/").split("/").filter((part) => part && part !== "." && part !== "..").join("/");
+  return result || "resource";
+}
+
+function uniqueZipPath(path, names) {
+  if (!names.has(path)) { names.add(path); return path; }
+  const dot = path.lastIndexOf(".");
+  const base = dot > 0 ? path.slice(0, dot) : path;
+  const extension = dot > 0 ? path.slice(dot) : "";
+  let index = 2;
+  while (names.has(`${base}-${index}${extension}`)) index += 1;
+  const unique = `${base}-${index}${extension}`;
+  names.add(unique);
+  return unique;
+}
+
+const crcTable = (() => {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) value = (value >>> 1) ^ ((value & 1) ? 0xedb88320 : 0);
+    table[index] = value >>> 0;
+  }
+  return table;
+})();
+
+function crc32(bytes) {
+  let value = 0xffffffff;
+  for (const byte of bytes) value = (value >>> 8) ^ crcTable[(value ^ byte) & 0xff];
+  return (value ^ 0xffffffff) >>> 0;
 }
 
 function downloadIndex() {
