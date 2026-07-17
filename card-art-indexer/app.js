@@ -7,6 +7,8 @@ const MAX_JSON_FILES = 96;
 const MAX_JSON_BYTES = 1024 * 1024;
 const MAX_RESOURCE_TREE_ENTRIES = 6000;
 const PAGE_SIZE = 10;
+const MAX_TEXT_PREVIEW_BYTES = 256 * 1024;
+const MAX_IMAGE_PREVIEW_BYTES = 16 * 1024 * 1024;
 const decoder = new TextDecoder("utf-8", { fatal: false });
 const semanticTokens = [
   "cardart", "cardimage", "cardillustration", "cardportrait", "cardskin",
@@ -44,6 +46,11 @@ const elements = {
   resourceFilter: document.querySelector("#resourceFilter"),
   resourceHint: document.querySelector("#resourceHint"),
   resourceTree: document.querySelector("#resourceTree"),
+  resourcePreview: document.querySelector("#resourcePreview"),
+  resourcePreviewTitle: document.querySelector("#resourcePreviewTitle"),
+  resourcePreviewMeta: document.querySelector("#resourcePreviewMeta"),
+  resourcePreviewBody: document.querySelector("#resourcePreviewBody"),
+  resourcePreviewClose: document.querySelector("#resourcePreviewClose"),
   diagnosticList: document.querySelector("#diagnostics"),
   download: document.querySelector("#downloadButton"),
   copy: document.querySelector("#copyButton")
@@ -53,6 +60,7 @@ let currentResult = null;
 let mappingPage = 1;
 let selectedFileTotal = 0;
 let fileStates = [];
+let resourcePreviewUrl = null;
 
 elements.input.addEventListener("change", () => {
   const file = elements.input.files[0];
@@ -78,6 +86,7 @@ elements.modVersion.addEventListener("input", renderResult);
 elements.resourceFilter.addEventListener("input", renderResourceTree);
 elements.mappingPrev.addEventListener("click", () => { mappingPage -= 1; renderMappingTable(); });
 elements.mappingNext.addEventListener("click", () => { mappingPage += 1; renderMappingTable(); });
+elements.resourcePreviewClose.addEventListener("click", closeResourcePreview);
 elements.download.addEventListener("click", downloadIndex);
 elements.copy.addEventListener("click", copyIndex);
 
@@ -109,6 +118,7 @@ async function loadModFolder(fileList) {
 
 async function loadSelectedFile(file, dllFile = null) {
   if (!file) return;
+  closeResourcePreview();
   if (!file.name.toLowerCase().endsWith(".pck")) {
     setStatus("请选择 .pck 文件。", true);
     return;
@@ -343,6 +353,7 @@ function analyzeArchive(file, archive, hash, dll) {
   return {
     file,
     hash,
+    archive,
     archiveEntryCount: archive.entries.length,
     jsonScanned,
     compressedEntries,
@@ -549,6 +560,69 @@ function renderMappingTable() {
   elements.mappingNext.disabled = mappingPage >= pageCount || mappings.length === 0;
 }
 
+function previewResource(resource) {
+  const archive = currentResult?.archive;
+  if (!archive) return;
+  closeResourcePreview();
+  const entry = archive.byPath.get(resource.path.toLowerCase());
+  elements.resourcePreviewTitle.textContent = resource.path.split("/").pop() || resource.path;
+  elements.resourcePreviewMeta.textContent = `${resource.path} · ${formatBytes(resource.size)}${resource.compressed ? " · 压缩条目" : ""}`;
+  elements.resourcePreview.classList.remove("hidden");
+  if (!entry) {
+    renderPreviewMessage("没有找到该资源的原始 PCK 条目，因此无法预览内容。");
+    return;
+  }
+  if (resource.compressed) {
+    renderPreviewMessage("此条目标记为压缩资源。当前纯浏览器解析器只读取目录，不会在本地尝试解压，因此无法安全预览内容。");
+    return;
+  }
+  if (isPreviewImage(resource.path)) {
+    if (entry.size > MAX_IMAGE_PREVIEW_BYTES) {
+      renderPreviewMessage(`图片大于 ${formatBytes(MAX_IMAGE_PREVIEW_BYTES)}，为避免浏览器解码占用过高，未加载预览。`);
+      return;
+    }
+    const image = document.createElement("img");
+    image.className = "resource-preview-image";
+    image.alt = resource.path;
+    image.addEventListener("error", () => renderPreviewMessage("浏览器无法解码该图片格式。Godot 专用纹理（如 .ctex）需要由游戏引擎读取，不能直接显示。"));
+    resourcePreviewUrl = URL.createObjectURL(new Blob([readEntry(archive, entry)], { type: imageMimeType(resource.path) }));
+    image.src = resourcePreviewUrl;
+    elements.resourcePreviewBody.replaceChildren(image);
+    return;
+  }
+  if (isPreviewText(resource.path)) {
+    const byteCount = Math.min(entry.size, MAX_TEXT_PREVIEW_BYTES);
+    const text = decoder.decode(readEntry(archive, entry).subarray(0, byteCount));
+    const pre = document.createElement("pre");
+    pre.className = "resource-preview-text";
+    pre.textContent = entry.size > MAX_TEXT_PREVIEW_BYTES ? `${text}\n\n… 已截断，仅显示前 ${formatBytes(MAX_TEXT_PREVIEW_BYTES)}。` : text;
+    elements.resourcePreviewBody.replaceChildren(pre);
+    return;
+  }
+  renderPreviewMessage("该文件不是浏览器可直接预览的文本或图片格式。可以查看其路径、大小和压缩状态；Godot 资源文件需由游戏引擎读取。");
+}
+
+function closeResourcePreview() {
+  if (resourcePreviewUrl) URL.revokeObjectURL(resourcePreviewUrl);
+  resourcePreviewUrl = null;
+  elements.resourcePreview.classList.add("hidden");
+  elements.resourcePreviewBody.replaceChildren();
+}
+
+function renderPreviewMessage(message) {
+  const node = document.createElement("p");
+  node.className = "resource-preview-message";
+  node.textContent = message;
+  elements.resourcePreviewBody.replaceChildren(node);
+}
+
+function isPreviewText(path) { return /\.(json|txt|cfg|ini|toml|yaml|yml|xml|csv|tscn|tres|gd|gdshader|shader|md|html|htm|css|js)$/i.test(path); }
+function isPreviewImage(path) { return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(path); }
+function imageMimeType(path) {
+  const extension = path.split(".").pop().toLowerCase();
+  return extension === "jpg" ? "image/jpeg" : extension === "svg" ? "image/svg+xml" : `image/${extension}`;
+}
+
 function renderResourceTree() {
   if (!currentResult) return;
   const resources = currentResult.resources || [];
@@ -605,7 +679,16 @@ function appendResourceBranch(parent, branch, depth) {
   for (const resource of files) {
     const row = document.createElement("div");
     row.className = `resource-file${resource.compressed ? " is-compressed" : ""}`;
-    row.title = resource.path;
+    row.title = `${resource.path}\n单击预览`;
+    row.tabIndex = 0;
+    row.setAttribute("role", "button");
+    row.setAttribute("aria-label", `预览 ${resource.path}`);
+    row.addEventListener("click", () => previewResource(resource));
+    row.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      previewResource(resource);
+    });
     const name = document.createElement("span");
     name.textContent = resource.fileName;
     row.append(name);

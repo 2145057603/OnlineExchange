@@ -137,6 +137,17 @@
     <a href="#resourcePanel">资源</a>
     <a href="#diagnosticPanel">诊断</a>
   </nav>
+  <aside id="resourcePreview" class="resource-preview hidden" aria-live="polite" aria-label="资源预览">
+    <div class="resource-preview-heading">
+      <div>
+        <p class="section-kicker">LOCAL RESOURCE PREVIEW</p>
+        <h2 id="resourcePreviewTitle">资源预览</h2>
+      </div>
+      <button id="resourcePreviewClose" class="preview-close" type="button" aria-label="关闭资源预览">×</button>
+    </div>
+    <p id="resourcePreviewMeta" class="resource-preview-meta"></p>
+    <div id="resourcePreviewBody" class="resource-preview-body"></div>
+  </aside>
   <footer>纯静态页面 · 可直接部署到 Cloudflare Pages · 不包含任何网络请求</footer>
   <script src="app.js"></script>
 </body>
