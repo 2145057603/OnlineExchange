@@ -5,6 +5,7 @@ const PCK_BASE_OFFSET = 0x70;
 const MAX_FILE_SIZE = 768 * 1024 * 1024;
 const MAX_JSON_FILES = 96;
 const MAX_JSON_BYTES = 1024 * 1024;
+const MAX_RESOURCE_TREE_ENTRIES = 6000;
 const PAGE_SIZE = 10;
 const decoder = new TextDecoder("utf-8", { fatal: false });
 const semanticTokens = [
@@ -42,11 +43,7 @@ const elements = {
   resourceCount: document.querySelector("#resourceCount"),
   resourceFilter: document.querySelector("#resourceFilter"),
   resourceHint: document.querySelector("#resourceHint"),
-  resourceRows: document.querySelector("#resourceRows"),
-  resourcePagination: document.querySelector("#resourcePagination"),
-  resourcePrev: document.querySelector("#resourcePrev"),
-  resourceNext: document.querySelector("#resourceNext"),
-  resourcePageInfo: document.querySelector("#resourcePageInfo"),
+  resourceTree: document.querySelector("#resourceTree"),
   diagnosticList: document.querySelector("#diagnostics"),
   download: document.querySelector("#downloadButton"),
   copy: document.querySelector("#copyButton")
@@ -54,7 +51,6 @@ const elements = {
 
 let currentResult = null;
 let mappingPage = 1;
-let resourcePage = 1;
 let selectedFileTotal = 0;
 let fileStates = [];
 
@@ -79,11 +75,9 @@ elements.dropZone.addEventListener("drop", (event) => {
 });
 elements.modId.addEventListener("input", renderResult);
 elements.modVersion.addEventListener("input", renderResult);
-elements.resourceFilter.addEventListener("input", () => { resourcePage = 1; renderResourceTable(); });
+elements.resourceFilter.addEventListener("input", renderResourceTree);
 elements.mappingPrev.addEventListener("click", () => { mappingPage -= 1; renderMappingTable(); });
 elements.mappingNext.addEventListener("click", () => { mappingPage += 1; renderMappingTable(); });
-elements.resourcePrev.addEventListener("click", () => { resourcePage -= 1; renderResourceTable(); });
-elements.resourceNext.addEventListener("click", () => { resourcePage += 1; renderResourceTable(); });
 elements.download.addEventListener("click", downloadIndex);
 elements.copy.addEventListener("click", copyIndex);
 
@@ -140,7 +134,6 @@ async function loadSelectedFile(file, dllFile = null) {
     currentResult = analyzeArchive(file, archive, hash, dll);
     elements.resourceFilter.value = "";
     mappingPage = 1;
-    resourcePage = 1;
     updateFileState(file, "已读取");
     if (dllFile) updateFileState(dllFile, dll?.skipped ? `已跳过：${dll.skipped}` : "已读取（静态扫描）", Boolean(dll?.skipped));
     renderResult();
@@ -536,7 +529,7 @@ function renderResult() {
   elements.mappingCount.textContent = `${currentResult.mappings.length} 条`;
   elements.emptyMappings.classList.toggle("hidden", currentResult.mappings.length !== 0);
   renderMappingTable();
-  renderResourceTable();
+  renderResourceTree();
   elements.diagnosticList.replaceChildren(...index.diagnostics.map((item) => {
     const row = document.createElement("li"); row.textContent = item; return row;
   }));
@@ -554,36 +547,6 @@ function renderMappingTable() {
   elements.mappingPageInfo.textContent = mappings.length === 0 ? "没有可导入映射" : `第 ${mappingPage} / ${pageCount} 页，每页 ${PAGE_SIZE} 条`;
   elements.mappingPrev.disabled = mappingPage <= 1 || mappings.length === 0;
   elements.mappingNext.disabled = mappingPage >= pageCount || mappings.length === 0;
-}
-
-function renderResourceTable() {
-  if (!currentResult) return;
-  const resources = currentResult.resources || [];
-  const filter = elements.resourceFilter.value.trim().replaceAll("\\", "/").toLocaleLowerCase();
-  const matched = filter ? resources.filter((entry) => entry.path.toLocaleLowerCase().includes(filter)) : resources;
-  const pageCount = Math.max(1, Math.ceil(matched.length / PAGE_SIZE));
-  resourcePage = Math.min(Math.max(resourcePage, 1), pageCount);
-  const first = (resourcePage - 1) * PAGE_SIZE;
-  elements.resourceRows.replaceChildren(...matched.slice(first, first + PAGE_SIZE).map(resourceRow));
-  elements.resourceCount.textContent = filter ? `匹配 ${matched.length} / 共 ${resources.length} 条` : `${resources.length} 个条目`;
-  elements.resourceHint.textContent = filter ? `正在按完整路径筛选“${elements.resourceFilter.value.trim()}”，每页显示 ${PAGE_SIZE} 条。` : `显示 PCK 的完整原始资源路径；每页 ${PAGE_SIZE} 条。`;
-  elements.resourcePageInfo.textContent = matched.length === 0 ? "没有匹配资源" : `第 ${resourcePage} / ${pageCount} 页，每页 ${PAGE_SIZE} 条`;
-  elements.resourcePrev.disabled = resourcePage <= 1 || matched.length === 0;
-  elements.resourceNext.disabled = resourcePage >= pageCount || matched.length === 0;
-}
-
-function resourceRow(resource) {
-  const row = document.createElement("tr");
-  const fileName = resource.path.split("/").pop() || resource.path;
-  const extension = fileName.includes(".") ? fileName.slice(fileName.lastIndexOf(".") + 1).toUpperCase() : "文件";
-  const values = [[resource.path, "path"], [extension, ""], [formatBytes(resource.size), ""], [resource.compressed ? "压缩条目" : "已读取目录", resource.compressed ? "compressed-status" : "read-status"]];
-  for (const [text, className] of values) {
-    const cell = document.createElement("td");
-    cell.textContent = text;
-    cell.className = className;
-    row.append(cell);
-  }
-  return row;
 }
 
 function renderResourceTree() {

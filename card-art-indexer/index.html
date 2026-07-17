@@ -116,17 +116,7 @@
         <input id="resourceFilter" type="search" autocomplete="off" placeholder="例如：card_art、portrait、.json、res://">
       </label>
       <p id="resourceHint" class="muted resource-hint"></p>
-      <div class="table-wrap resource-table-wrap">
-        <table>
-          <thead><tr><th>完整资源路径</th><th>类型</th><th>大小</th><th>读取状态</th></tr></thead>
-          <tbody id="resourceRows"></tbody>
-        </table>
-      </div>
-      <div id="resourcePagination" class="pagination" aria-label="PCK 资源分页">
-        <button id="resourcePrev" class="pagination-button" type="button">上一页</button>
-        <span id="resourcePageInfo" class="pagination-info">第 0 / 0 页</span>
-        <button id="resourceNext" class="pagination-button" type="button">下一页</button>
-      </div>
+      <div id="resourceTree" class="resource-tree"></div>
     </section>
 
     <section id="diagnosticPanel" class="panel hidden">
