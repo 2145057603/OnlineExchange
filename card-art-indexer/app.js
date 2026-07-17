@@ -17,6 +17,7 @@ const semanticTokens = [
 
 const elements = {
   input: document.querySelector("#pckInput"),
+  folderInput: document.querySelector("#folderInput"),
   dropZone: document.querySelector("#dropZone"),
   status: document.querySelector("#status"),
   modId: document.querySelector("#modId"),
@@ -38,6 +39,7 @@ const elements = {
 let currentResult = null;
 
 elements.input.addEventListener("change", () => loadSelectedFile(elements.input.files[0]));
+elements.folderInput.addEventListener("change", () => loadModFolder(elements.folderInput.files));
 ["dragenter", "dragover"].forEach((eventName) => elements.dropZone.addEventListener(eventName, (event) => {
   event.preventDefault();
   elements.dropZone.classList.add("is-dragging");
@@ -52,7 +54,31 @@ elements.modVersion.addEventListener("input", renderResult);
 elements.download.addEventListener("click", downloadIndex);
 elements.copy.addEventListener("click", copyIndex);
 
-async function loadSelectedFile(file) {
+async function loadModFolder(fileList) {
+  const files = [...fileList];
+  if (files.length === 0) return;
+  const manifestFile = files.find((file) => file.name.toLowerCase() === "mod_manifest.json");
+  let manifest = null;
+  if (manifestFile) {
+    try { manifest = JSON.parse(await manifestFile.text()); }
+    catch { setStatus("已找到 mod_manifest.json，但文件不是有效 JSON；仍会继续分析 PCK。", true); }
+  }
+  const pckFiles = files.filter((file) => file.name.toLowerCase().endsWith(".pck"));
+  const expectedPckName = manifest?.id ? `${manifest.id}.pck`.toLowerCase() : "";
+  const pckFile = pckFiles.find((file) => file.name.toLowerCase() === expectedPckName) || pckFiles[0];
+  if (!pckFile) {
+    setStatus("所选文件夹中没有找到 .pck 文件。", true);
+    return;
+  }
+  if (manifest?.id) elements.modId.value = String(manifest.id);
+  if (manifest?.version) elements.modVersion.value = String(manifest.version);
+  const expectedDllName = manifest?.id ? `${manifest.id}.dll`.toLowerCase() : "";
+  const dllFile = files.find((file) => file.name.toLowerCase() === expectedDllName)
+    || files.find((file) => file.name.toLowerCase().endsWith(".dll"));
+  await loadSelectedFile(pckFile, dllFile || null);
+}
+
+async function loadSelectedFile(file, dllFile = null) {
   if (!file) return;
   if (!file.name.toLowerCase().endsWith(".pck")) {
     setStatus("请选择 .pck 文件。", true);
@@ -66,13 +92,14 @@ async function loadSelectedFile(file) {
   try {
     setStatus("正在本地读取 PCK 与计算 SHA-256…");
     const buffer = await file.arrayBuffer();
-    const [hashBuffer, archive] = await Promise.all([
+    const [hashBuffer, archive, dll] = await Promise.all([
       crypto.subtle.digest("SHA-256", buffer),
-      Promise.resolve(parsePck(buffer))
+      Promise.resolve(parsePck(buffer)),
+      inspectDll(dllFile)
     ]);
     setStatus("正在分析 JSON 与资源映射…");
     const hash = bytesToHex(new Uint8Array(hashBuffer));
-    currentResult = analyzeArchive(file, archive, hash);
+    currentResult = analyzeArchive(file, archive, hash, dll);
     renderResult();
     setStatus("解析完成。索引仅保留在当前浏览器内存，下载前不会写入网络。");
   } catch (error) {
@@ -121,7 +148,53 @@ function parsePck(buffer) {
   return { buffer, entries, byPath };
 }
 
-function analyzeArchive(file, archive, hash) {
+async function inspectDll(file) {
+  if (!file) return null;
+  const maxDllBytes = 128 * 1024 * 1024;
+  if (file.size > maxDllBytes) {
+    return { fileName: file.name, skipped: "DLL 超过 128 MiB 静态分析上限", resourceReferences: [] };
+  }
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  const strings = extractStaticStrings(bytes);
+  const resourceReferences = [...new Set(strings
+    .filter((value) => looksLikeImage(value))
+    .map(normalizePath)
+    .filter(Boolean))].slice(0, 4096);
+  const hash = bytesToHex(new Uint8Array(await crypto.subtle.digest("SHA-256", buffer)));
+  return { fileName: file.name, sha256: hash, stringCount: strings.length, resourceReferences };
+}
+
+function extractStaticStrings(bytes) {
+  const values = new Set();
+  let ascii = "";
+  for (let index = 0; index < bytes.length; index += 1) {
+    const value = bytes[index];
+    if (value >= 32 && value <= 126) {
+      ascii += String.fromCharCode(value);
+    } else {
+      if (ascii.length >= 5) values.add(ascii);
+      ascii = "";
+    }
+  }
+  if (ascii.length >= 5) values.add(ascii);
+
+  for (let start = 0; start + 10 < bytes.length; start += 1) {
+    let index = start;
+    let text = "";
+    while (index + 1 < bytes.length && bytes[index] >= 32 && bytes[index] <= 126 && bytes[index + 1] === 0 && text.length < 1024) {
+      text += String.fromCharCode(bytes[index]);
+      index += 2;
+    }
+    if (text.length >= 5) {
+      values.add(text);
+      start = index - 1;
+    }
+  }
+  return [...values];
+}
+
+function analyzeArchive(file, archive, hash, dll) {
   const mappings = new Map();
   const diagnostics = [];
   let jsonScanned = 0;
@@ -154,9 +227,13 @@ function analyzeArchive(file, archive, hash) {
     }
   }
 
+  if (dll) extractDllResourceMappings(dll, archive, mappings);
+
   if (compressedEntries > 0) diagnostics.push(`已跳过 ${compressedEntries} 个带压缩标记的 PCK 条目。`);
   if (jsonEntries.length > MAX_JSON_FILES) diagnostics.push(`JSON 文件超过上限，仅扫描前 ${MAX_JSON_FILES} 个。`);
   if (skippedLargeJson > 0) diagnostics.push(`已跳过 ${skippedLargeJson} 个超过 1 MiB 的 JSON 文件。`);
+  if (dll?.skipped) diagnostics.push(`DLL 静态分析已跳过：${dll.skipped}。`);
+  if (dll && !dll.skipped) diagnostics.push(`已本地检查 ${dll.fileName} 的 ${dll.stringCount} 条静态字符串，找到 ${dll.resourceReferences.length} 条图片资源引用；DLL 未被执行。`);
   if (mappings.size === 0) diagnostics.push("未发现可确认映射：可检查模组是否使用运行时替换、压缩资源或非标准数据结构。");
   diagnostics.push("输出索引应由游戏内模组再次校验 PCK SHA-256 与资源路径后再导入。");
 
@@ -166,9 +243,18 @@ function analyzeArchive(file, archive, hash) {
     archiveEntryCount: archive.entries.length,
     jsonScanned,
     compressedEntries,
+    dll,
     diagnostics,
     mappings: [...mappings.values()].sort((left, right) => left.cardId.localeCompare(right.cardId) || left.resourcePath.localeCompare(right.resourcePath))
   };
+}
+
+function extractDllResourceMappings(dll, archive, mappings) {
+  for (const resourcePath of dll.resourceReferences) {
+    if (!resourceExists(archive, resourcePath)) continue;
+    const cardId = inferCardId(resourcePath);
+    addMapping(mappings, archive, cardId, resourcePath, dll.fileName, "DLL 静态资源引用 + 文件名推断", "medium");
+  }
 }
 
 function extractReplacementMappings(data, sourceFile, archive, mappings) {
@@ -307,6 +393,11 @@ function buildIndex() {
     indexId: `local:${modId || "unknown-mod"}:${currentResult.hash.slice(0, 16)}`,
     mod: { id: modId, version: modVersion },
     pck: { fileName: currentResult.file.name, size: currentResult.file.size, sha256: currentResult.hash },
+    staticDll: currentResult.dll ? {
+      fileName: currentResult.dll.fileName,
+      sha256: currentResult.dll.sha256 || "",
+      resourceReferences: currentResult.dll.resourceReferences
+    } : null,
     mappings: currentResult.mappings,
     diagnostics: currentResult.diagnostics
   };
@@ -324,7 +415,7 @@ function renderResult() {
     metric(currentResult.archiveEntryCount, "PCK 条目"),
     metric(currentResult.jsonScanned, "JSON 已扫描"),
     metric(currentResult.mappings.length, "可导入映射"),
-    metric(currentResult.compressedEntries, "压缩条目跳过")
+    metric(currentResult.dll?.resourceReferences.length || 0, "DLL 图片引用")
   );
   elements.mappingCount.textContent = `${currentResult.mappings.length} 条`;
   elements.mappingRows.replaceChildren(...currentResult.mappings.map(mappingRow));

@@ -23,14 +23,18 @@
       <div class="section-heading">
         <div>
           <p class="section-kicker">输入文件</p>
-          <h2>选择本地 PCK</h2>
+          <h2>选择模组文件夹或 PCK</h2>
         </div>
         <span class="privacy-badge">不上传 · 无后端</span>
       </div>
       <label id="dropZone" class="drop-zone" for="pckInput">
         <input id="pckInput" type="file" accept=".pck,application/octet-stream" hidden>
         <strong>拖入 .pck 文件，或点击选择</strong>
-        <span>支持未压缩资源目录的 Godot PCK。解析只读取目录和 JSON 数据。</span>
+        <span>也可选择整个模组文件夹，自动读取 manifest、PCK 与 DLL 静态引用。</span>
+      </label>
+      <label class="folder-picker" for="folderInput">
+        <input id="folderInput" type="file" webkitdirectory multiple hidden>
+        选择整个模组文件夹
       </label>
       <p id="status" class="status" role="status">等待选择文件</p>
     </section>
