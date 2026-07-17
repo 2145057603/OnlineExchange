@@ -17,7 +17,7 @@
 
 ## 本地索引
 
-输出 JSON 记录 PCK 文件名、大小、SHA-256、模组 ID/版本，以及已识别的 `cardId -> resourcePath` 映射。将输出放入 `D:\codex\OnlineExchange\indexes` 后，OnlineExchange 会在本地自动校验已加载 PCK 的 SHA-256、模组 ID 和资源路径，再导入匹配项。
+输出 JSON 记录 PCK 文件名、大小、SHA-256、模组 ID/版本，以及已识别的 `cardId -> resourcePath` 映射。网页优先使用“复制索引 JSON”；在游戏卡牌库打开“优先级”后点击“粘贴索引”，直接粘贴并导入。OnlineExchange 会校验已加载 PCK 的 SHA-256、模组 ID 和资源路径，再保存已验证索引到自身配置中；不需要管理独立 JSON 文件。
 
 ## 限制
 
