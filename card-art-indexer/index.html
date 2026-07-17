@@ -19,7 +19,7 @@
       <span>1. 选择 PCK</span><i></i><span>2. 本地解析</span><i></i><span>3. 下载索引</span>
     </section>
 
-    <section class="panel upload-panel">
+    <section id="uploadPanel" class="panel upload-panel">
       <div class="section-heading">
         <div>
           <p class="section-kicker">输入文件</p>
@@ -37,6 +37,19 @@
         选择整个模组文件夹
       </label>
       <p id="status" class="status" role="status">等待选择文件</p>
+    </section>
+
+    <section id="fileStatusPanel" class="panel file-status-panel" aria-live="polite">
+      <div class="section-heading">
+        <div>
+          <p class="section-kicker">FILE READ STATUS</p>
+          <h2>已选择文件与读取状态</h2>
+        </div>
+        <span id="fileStatusSummary" class="hint">尚未选择文件</span>
+      </div>
+      <ul id="fileStatusList" class="file-status-list">
+        <li class="file-status-empty">选择 PCK 或模组文件夹后，会在这里显示本地读取状态。</li>
+      </ul>
     </section>
 
     <section class="panel metadata-panel">
@@ -83,6 +96,11 @@
           <tbody id="mappingRows"></tbody>
         </table>
       </div>
+      <div id="mappingPagination" class="pagination hidden" aria-label="映射分页">
+        <button id="mappingPrev" class="pagination-button" type="button">上一页</button>
+        <span id="mappingPageInfo" class="pagination-info">第 0 / 0 页</span>
+        <button id="mappingNext" class="pagination-button" type="button">下一页</button>
+      </div>
       <p id="emptyMappings" class="empty hidden">没有发现可确认的映射。该模组可能使用运行时替换、压缩资源或未识别的 JSON 结构。</p>
     </section>
 
@@ -98,7 +116,17 @@
         <input id="resourceFilter" type="search" autocomplete="off" placeholder="例如：card_art、portrait、.json、res://">
       </label>
       <p id="resourceHint" class="muted resource-hint"></p>
-      <div id="resourceTree" class="resource-tree"></div>
+      <div class="table-wrap resource-table-wrap">
+        <table>
+          <thead><tr><th>完整资源路径</th><th>类型</th><th>大小</th><th>读取状态</th></tr></thead>
+          <tbody id="resourceRows"></tbody>
+        </table>
+      </div>
+      <div id="resourcePagination" class="pagination" aria-label="PCK 资源分页">
+        <button id="resourcePrev" class="pagination-button" type="button">上一页</button>
+        <span id="resourcePageInfo" class="pagination-info">第 0 / 0 页</span>
+        <button id="resourceNext" class="pagination-button" type="button">下一页</button>
+      </div>
     </section>
 
     <section id="diagnosticPanel" class="panel hidden">
@@ -111,6 +139,14 @@
       <ul id="diagnostics" class="diagnostics"></ul>
     </section>
   </main>
+  <nav class="page-nav" aria-label="页面导航">
+    <a href="#uploadPanel">文件</a>
+    <a href="#fileStatusPanel">状态</a>
+    <a href="#summaryPanel">结果</a>
+    <a href="#mappingPanel">映射</a>
+    <a href="#resourcePanel">资源</a>
+    <a href="#diagnosticPanel">诊断</a>
+  </nav>
   <footer>纯静态页面 · 可直接部署到 Cloudflare Pages · 不包含任何网络请求</footer>
   <script src="app.js"></script>
 </body>

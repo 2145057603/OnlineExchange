@@ -5,7 +5,7 @@ const PCK_BASE_OFFSET = 0x70;
 const MAX_FILE_SIZE = 768 * 1024 * 1024;
 const MAX_JSON_FILES = 96;
 const MAX_JSON_BYTES = 1024 * 1024;
-const MAX_RESOURCE_TREE_ENTRIES = 6000;
+const PAGE_SIZE = 10;
 const decoder = new TextDecoder("utf-8", { fatal: false });
 const semanticTokens = [
   "cardart", "cardimage", "cardillustration", "cardportrait", "cardskin",
@@ -21,6 +21,8 @@ const elements = {
   folderInput: document.querySelector("#folderInput"),
   dropZone: document.querySelector("#dropZone"),
   status: document.querySelector("#status"),
+  fileStatusSummary: document.querySelector("#fileStatusSummary"),
+  fileStatusList: document.querySelector("#fileStatusList"),
   modId: document.querySelector("#modId"),
   modVersion: document.querySelector("#modVersion"),
   summary: document.querySelector("#summaryPanel"),
@@ -33,18 +35,34 @@ const elements = {
   mappingCount: document.querySelector("#mappingCount"),
   mappingRows: document.querySelector("#mappingRows"),
   emptyMappings: document.querySelector("#emptyMappings"),
+  mappingPagination: document.querySelector("#mappingPagination"),
+  mappingPrev: document.querySelector("#mappingPrev"),
+  mappingNext: document.querySelector("#mappingNext"),
+  mappingPageInfo: document.querySelector("#mappingPageInfo"),
   resourceCount: document.querySelector("#resourceCount"),
   resourceFilter: document.querySelector("#resourceFilter"),
   resourceHint: document.querySelector("#resourceHint"),
-  resourceTree: document.querySelector("#resourceTree"),
+  resourceRows: document.querySelector("#resourceRows"),
+  resourcePagination: document.querySelector("#resourcePagination"),
+  resourcePrev: document.querySelector("#resourcePrev"),
+  resourceNext: document.querySelector("#resourceNext"),
+  resourcePageInfo: document.querySelector("#resourcePageInfo"),
   diagnosticList: document.querySelector("#diagnostics"),
   download: document.querySelector("#downloadButton"),
   copy: document.querySelector("#copyButton")
 };
 
 let currentResult = null;
+let mappingPage = 1;
+let resourcePage = 1;
+let selectedFileTotal = 0;
+let fileStates = [];
 
-elements.input.addEventListener("change", () => loadSelectedFile(elements.input.files[0]));
+elements.input.addEventListener("change", () => {
+  const file = elements.input.files[0];
+  if (file) startFileTracking([file]);
+  loadSelectedFile(file);
+});
 elements.folderInput.addEventListener("change", () => loadModFolder(elements.folderInput.files));
 ["dragenter", "dragover"].forEach((eventName) => elements.dropZone.addEventListener(eventName, (event) => {
   event.preventDefault();
@@ -54,20 +72,29 @@ elements.folderInput.addEventListener("change", () => loadModFolder(elements.fol
   event.preventDefault();
   elements.dropZone.classList.remove("is-dragging");
 }));
-elements.dropZone.addEventListener("drop", (event) => loadSelectedFile(event.dataTransfer.files[0]));
+elements.dropZone.addEventListener("drop", (event) => {
+  const file = event.dataTransfer.files[0];
+  if (file) startFileTracking([file]);
+  loadSelectedFile(file);
+});
 elements.modId.addEventListener("input", renderResult);
 elements.modVersion.addEventListener("input", renderResult);
-elements.resourceFilter.addEventListener("input", renderResourceTree);
+elements.resourceFilter.addEventListener("input", () => { resourcePage = 1; renderResourceTable(); });
+elements.mappingPrev.addEventListener("click", () => { mappingPage -= 1; renderMappingTable(); });
+elements.mappingNext.addEventListener("click", () => { mappingPage += 1; renderMappingTable(); });
+elements.resourcePrev.addEventListener("click", () => { resourcePage -= 1; renderResourceTable(); });
+elements.resourceNext.addEventListener("click", () => { resourcePage += 1; renderResourceTable(); });
 elements.download.addEventListener("click", downloadIndex);
 elements.copy.addEventListener("click", copyIndex);
 
 async function loadModFolder(fileList) {
   const files = [...fileList];
   if (files.length === 0) return;
+  startFileTracking(files);
   const manifestFile = files.find((file) => file.name.toLowerCase() === "mod_manifest.json");
   let manifest = null;
   if (manifestFile) {
-    try { manifest = JSON.parse(await manifestFile.text()); }
+    try { manifest = JSON.parse(await manifestFile.text()); updateFileState(manifestFile, "已读取"); }
     catch { setStatus("已找到 mod_manifest.json，但文件不是有效 JSON；仍会继续分析 PCK。", true); }
   }
   const pckFiles = files.filter((file) => file.name.toLowerCase().endsWith(".pck"));
@@ -82,6 +109,7 @@ async function loadModFolder(fileList) {
   const expectedDllName = manifest?.id ? `${manifest.id}.dll`.toLowerCase() : "";
   const dllFile = files.find((file) => file.name.toLowerCase() === expectedDllName)
     || files.find((file) => file.name.toLowerCase().endsWith(".dll"));
+  markUnselectedFiles(pckFile, dllFile || null);
   await loadSelectedFile(pckFile, dllFile || null);
 }
 
@@ -92,11 +120,14 @@ async function loadSelectedFile(file, dllFile = null) {
     return;
   }
   if (file.size > MAX_FILE_SIZE) {
+    updateFileState(file, "超出读取上限", true);
     setStatus("文件超过 768 MiB 的浏览器安全解析上限。", true);
     return;
   }
 
   try {
+    updateFileState(file, "读取中");
+    if (dllFile) updateFileState(dllFile, "读取中（静态扫描）");
     setStatus("正在本地读取 PCK 与计算 SHA-256…");
     const buffer = await file.arrayBuffer();
     const [hashBuffer, archive, dll] = await Promise.all([
@@ -108,12 +139,83 @@ async function loadSelectedFile(file, dllFile = null) {
     const hash = bytesToHex(new Uint8Array(hashBuffer));
     currentResult = analyzeArchive(file, archive, hash, dll);
     elements.resourceFilter.value = "";
+    mappingPage = 1;
+    resourcePage = 1;
+    updateFileState(file, "已读取");
+    if (dllFile) updateFileState(dllFile, dll?.skipped ? `已跳过：${dll.skipped}` : "已读取（静态扫描）", Boolean(dll?.skipped));
     renderResult();
     setStatus("解析完成。索引仅保留在当前浏览器内存，下载前不会写入网络。");
   } catch (error) {
     currentResult = null;
+    updateFileState(file, "读取失败", true);
+    if (dllFile) updateFileState(dllFile, "未完成读取", true);
     hideResults();
     setStatus(`解析失败：${error.message || "未知错误"}`, true);
+  }
+}
+
+function startFileTracking(files) {
+  selectedFileTotal = files.length;
+  fileStates = files
+    .filter((file) => /(^mod_manifest\.json$|\.pck$|\.dll$)/i.test(file.name))
+    .map((file) => ({
+      file,
+      name: file.webkitRelativePath || file.name,
+      role: file.name.toLowerCase() === "mod_manifest.json" ? "Manifest" : file.name.toLowerCase().endsWith(".dll") ? "DLL" : "PCK",
+      state: "等待读取",
+      error: false
+    }));
+  renderFileStates();
+}
+
+function updateFileState(file, state, error = false) {
+  if (!file) return;
+  let item = fileStates.find((candidate) => candidate.file === file);
+  if (!item) {
+    item = { file, name: file.webkitRelativePath || file.name, role: file.name.toLowerCase().endsWith(".dll") ? "DLL" : "PCK", state, error };
+    fileStates.push(item);
+    selectedFileTotal = Math.max(selectedFileTotal, fileStates.length);
+  } else {
+    item.state = state;
+    item.error = error;
+  }
+  renderFileStates();
+}
+
+function markUnselectedFiles(selectedPck, selectedDll) {
+  for (const item of fileStates) {
+    if (item.state !== "等待读取" || item.file === selectedPck || item.file === selectedDll) continue;
+    item.state = item.role === "Manifest" ? "未读取" : "未选用";
+  }
+  renderFileStates();
+}
+
+function renderFileStates() {
+  if (!elements.fileStatusList || !elements.fileStatusSummary) return;
+  const readCount = fileStates.filter((item) => item.state.startsWith("已读取")).length;
+  elements.fileStatusSummary.textContent = selectedFileTotal === 0 ? "尚未选择文件" : `已选择 ${selectedFileTotal} 个文件，已读取 ${readCount} 个`;
+  elements.fileStatusList.replaceChildren();
+  if (fileStates.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "file-status-empty";
+    empty.textContent = "未发现可由本工具读取的 Manifest、PCK 或 DLL 文件。";
+    elements.fileStatusList.append(empty);
+    return;
+  }
+  for (const item of fileStates) {
+    const row = document.createElement("li");
+    row.className = `file-status-item${item.error ? " is-error" : ""}`;
+    const name = document.createElement("span");
+    name.className = "file-status-name";
+    name.textContent = item.name;
+    const role = document.createElement("span");
+    role.className = "file-status-role";
+    role.textContent = item.role;
+    const state = document.createElement("span");
+    state.className = "file-status-state";
+    state.textContent = item.state;
+    row.append(name, role, state);
+    elements.fileStatusList.append(row);
   }
 }
 
@@ -432,12 +534,56 @@ function renderResult() {
     metric(currentResult.dll?.resourceReferences.length || 0, "DLL 图片引用")
   );
   elements.mappingCount.textContent = `${currentResult.mappings.length} 条`;
-  elements.mappingRows.replaceChildren(...currentResult.mappings.map(mappingRow));
   elements.emptyMappings.classList.toggle("hidden", currentResult.mappings.length !== 0);
-  renderResourceTree();
+  renderMappingTable();
+  renderResourceTable();
   elements.diagnosticList.replaceChildren(...index.diagnostics.map((item) => {
     const row = document.createElement("li"); row.textContent = item; return row;
   }));
+}
+
+function renderMappingTable() {
+  if (!currentResult) return;
+  const mappings = currentResult.mappings;
+  const pageCount = Math.max(1, Math.ceil(mappings.length / PAGE_SIZE));
+  mappingPage = Math.min(Math.max(mappingPage, 1), pageCount);
+  const first = (mappingPage - 1) * PAGE_SIZE;
+  elements.mappingRows.replaceChildren(...mappings.slice(first, first + PAGE_SIZE).map(mappingRow));
+  elements.mappingCount.textContent = `${mappings.length} 条`;
+  elements.mappingPagination.classList.toggle("hidden", mappings.length === 0);
+  elements.mappingPageInfo.textContent = mappings.length === 0 ? "没有可导入映射" : `第 ${mappingPage} / ${pageCount} 页，每页 ${PAGE_SIZE} 条`;
+  elements.mappingPrev.disabled = mappingPage <= 1 || mappings.length === 0;
+  elements.mappingNext.disabled = mappingPage >= pageCount || mappings.length === 0;
+}
+
+function renderResourceTable() {
+  if (!currentResult) return;
+  const resources = currentResult.resources || [];
+  const filter = elements.resourceFilter.value.trim().replaceAll("\\", "/").toLocaleLowerCase();
+  const matched = filter ? resources.filter((entry) => entry.path.toLocaleLowerCase().includes(filter)) : resources;
+  const pageCount = Math.max(1, Math.ceil(matched.length / PAGE_SIZE));
+  resourcePage = Math.min(Math.max(resourcePage, 1), pageCount);
+  const first = (resourcePage - 1) * PAGE_SIZE;
+  elements.resourceRows.replaceChildren(...matched.slice(first, first + PAGE_SIZE).map(resourceRow));
+  elements.resourceCount.textContent = filter ? `匹配 ${matched.length} / 共 ${resources.length} 条` : `${resources.length} 个条目`;
+  elements.resourceHint.textContent = filter ? `正在按完整路径筛选“${elements.resourceFilter.value.trim()}”，每页显示 ${PAGE_SIZE} 条。` : `显示 PCK 的完整原始资源路径；每页 ${PAGE_SIZE} 条。`;
+  elements.resourcePageInfo.textContent = matched.length === 0 ? "没有匹配资源" : `第 ${resourcePage} / ${pageCount} 页，每页 ${PAGE_SIZE} 条`;
+  elements.resourcePrev.disabled = resourcePage <= 1 || matched.length === 0;
+  elements.resourceNext.disabled = resourcePage >= pageCount || matched.length === 0;
+}
+
+function resourceRow(resource) {
+  const row = document.createElement("tr");
+  const fileName = resource.path.split("/").pop() || resource.path;
+  const extension = fileName.includes(".") ? fileName.slice(fileName.lastIndexOf(".") + 1).toUpperCase() : "文件";
+  const values = [[resource.path, "path"], [extension, ""], [formatBytes(resource.size), ""], [resource.compressed ? "压缩条目" : "已读取目录", resource.compressed ? "compressed-status" : "read-status"]];
+  for (const [text, className] of values) {
+    const cell = document.createElement("td");
+    cell.textContent = text;
+    cell.className = className;
+    row.append(cell);
+  }
+  return row;
 }
 
 function renderResourceTree() {
