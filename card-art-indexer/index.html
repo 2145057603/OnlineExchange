@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="本地解析 Slay the Spire 2 卡面模组 PCK，并生成可导入的本地索引。">
+  <title>卡面索引工坊</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <p class="eyebrow">LOCAL PCK INDEXER · NO UPLOAD</p>
+      <h1>卡面索引工坊</h1>
+      <p class="subtitle">在浏览器本地解析 PCK，生成卡牌与卡图资源的对照索引。文件不会离开你的设备。</p>
+    </header>
+
+    <section class="workflow" aria-label="使用流程">
+      <span>1. 选择 PCK</span><i></i><span>2. 本地解析</span><i></i><span>3. 下载索引</span>
+    </section>
+
+    <section class="panel upload-panel">
+      <div class="section-heading">
+        <div>
+          <p class="section-kicker">输入文件</p>
+          <h2>选择本地 PCK</h2>
+        </div>
+        <span class="privacy-badge">不上传 · 无后端</span>
+      </div>
+      <label id="dropZone" class="drop-zone" for="pckInput">
+        <input id="pckInput" type="file" accept=".pck,application/octet-stream" hidden>
+        <strong>拖入 .pck 文件，或点击选择</strong>
+        <span>支持未压缩资源目录的 Godot PCK。解析只读取目录和 JSON 数据。</span>
+      </label>
+      <p id="status" class="status" role="status">等待选择文件</p>
+    </section>
+
+    <section class="panel metadata-panel">
+      <div class="section-heading">
+        <div>
+          <p class="section-kicker">索引元数据</p>
+          <h2>补充模组标识</h2>
+        </div>
+        <span class="hint">可选，但建议填写</span>
+      </div>
+      <div class="form-grid">
+        <label>模组 ID<input id="modId" autocomplete="off" placeholder="例如: author.cardartpack"></label>
+        <label>模组版本<input id="modVersion" autocomplete="off" placeholder="例如: 1.2.0"></label>
+      </div>
+      <p class="muted">PCK 通常不包含外部 mod manifest；填写 ID 与版本可让游戏本地准确匹配索引。文件 SHA-256 会自动写入索引。</p>
+    </section>
+
+    <section id="summaryPanel" class="panel hidden" aria-live="polite">
+      <div class="section-heading">
+        <div>
+          <p class="section-kicker">解析结果</p>
+          <h2 id="fileTitle">—</h2>
+        </div>
+        <span id="hashBadge" class="hash-badge">SHA-256 —</span>
+      </div>
+      <div id="metrics" class="metrics"></div>
+      <div class="action-row">
+        <button id="downloadButton" class="button primary" type="button">下载本地索引 JSON</button>
+        <button id="copyButton" class="button secondary" type="button">复制索引 JSON</button>
+      </div>
+    </section>
+
+    <section id="mappingPanel" class="panel hidden">
+      <div class="section-heading">
+        <div>
+          <p class="section-kicker">可导入映射</p>
+          <h2>卡牌与资源路径</h2>
+        </div>
+        <span id="mappingCount" class="hint">0 条</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>卡牌 ID</th><th>资源路径</th><th>依据</th><th>置信度</th></tr></thead>
+          <tbody id="mappingRows"></tbody>
+        </table>
+      </div>
+      <p id="emptyMappings" class="empty hidden">没有发现可确认的映射。该模组可能使用运行时替换、压缩资源或未识别的 JSON 结构。</p>
+    </section>
+
+    <section id="diagnosticPanel" class="panel hidden">
+      <div class="section-heading">
+        <div>
+          <p class="section-kicker">诊断</p>
+          <h2>解析范围</h2>
+        </div>
+      </div>
+      <ul id="diagnostics" class="diagnostics"></ul>
+    </section>
+  </main>
+  <footer>纯静态页面 · 可直接部署到 Cloudflare Pages · 不包含任何网络请求</footer>
+  <script src="app.js"></script>
+</body>
+</html>
