@@ -86,6 +86,21 @@
       <p id="emptyMappings" class="empty hidden">没有发现可确认的映射。该模组可能使用运行时替换、压缩资源或未识别的 JSON 结构。</p>
     </section>
 
+    <section id="resourcePanel" class="panel hidden">
+      <div class="section-heading">
+        <div>
+          <p class="section-kicker">PCK RESOURCE BROWSER</p>
+          <h2>内部资源结构</h2>
+        </div>
+        <span id="resourceCount" class="hint">0 个条目</span>
+      </div>
+      <label class="resource-filter-label" for="resourceFilter">按完整路径筛选
+        <input id="resourceFilter" type="search" autocomplete="off" placeholder="例如：card_art、portrait、.json、res://">
+      </label>
+      <p id="resourceHint" class="muted resource-hint"></p>
+      <div id="resourceTree" class="resource-tree"></div>
+    </section>
+
     <section id="diagnosticPanel" class="panel hidden">
       <div class="section-heading">
         <div>

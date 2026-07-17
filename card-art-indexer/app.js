@@ -5,6 +5,7 @@ const PCK_BASE_OFFSET = 0x70;
 const MAX_FILE_SIZE = 768 * 1024 * 1024;
 const MAX_JSON_FILES = 96;
 const MAX_JSON_BYTES = 1024 * 1024;
+const MAX_RESOURCE_TREE_ENTRIES = 6000;
 const decoder = new TextDecoder("utf-8", { fatal: false });
 const semanticTokens = [
   "cardart", "cardimage", "cardillustration", "cardportrait", "cardskin",
@@ -24,6 +25,7 @@ const elements = {
   modVersion: document.querySelector("#modVersion"),
   summary: document.querySelector("#summaryPanel"),
   mappings: document.querySelector("#mappingPanel"),
+  resources: document.querySelector("#resourcePanel"),
   diagnostics: document.querySelector("#diagnosticPanel"),
   fileTitle: document.querySelector("#fileTitle"),
   hashBadge: document.querySelector("#hashBadge"),
@@ -31,6 +33,10 @@ const elements = {
   mappingCount: document.querySelector("#mappingCount"),
   mappingRows: document.querySelector("#mappingRows"),
   emptyMappings: document.querySelector("#emptyMappings"),
+  resourceCount: document.querySelector("#resourceCount"),
+  resourceFilter: document.querySelector("#resourceFilter"),
+  resourceHint: document.querySelector("#resourceHint"),
+  resourceTree: document.querySelector("#resourceTree"),
   diagnosticList: document.querySelector("#diagnostics"),
   download: document.querySelector("#downloadButton"),
   copy: document.querySelector("#copyButton")
@@ -51,6 +57,7 @@ elements.folderInput.addEventListener("change", () => loadModFolder(elements.fol
 elements.dropZone.addEventListener("drop", (event) => loadSelectedFile(event.dataTransfer.files[0]));
 elements.modId.addEventListener("input", renderResult);
 elements.modVersion.addEventListener("input", renderResult);
+elements.resourceFilter.addEventListener("input", renderResourceTree);
 elements.download.addEventListener("click", downloadIndex);
 elements.copy.addEventListener("click", copyIndex);
 
@@ -100,6 +107,7 @@ async function loadSelectedFile(file, dllFile = null) {
     setStatus("正在分析 JSON 与资源映射…");
     const hash = bytesToHex(new Uint8Array(hashBuffer));
     currentResult = analyzeArchive(file, archive, hash, dll);
+    elements.resourceFilter.value = "";
     renderResult();
     setStatus("解析完成。索引仅保留在当前浏览器内存，下载前不会写入网络。");
   } catch (error) {
@@ -243,6 +251,11 @@ function analyzeArchive(file, archive, hash, dll) {
     archiveEntryCount: archive.entries.length,
     jsonScanned,
     compressedEntries,
+    resources: archive.entries.map((entry) => ({
+      path: entry.path,
+      size: entry.size,
+      compressed: (entry.flags & 1) !== 0
+    })),
     dll,
     diagnostics,
     mappings: [...mappings.values()].sort((left, right) => left.cardId.localeCompare(right.cardId) || left.resourcePath.localeCompare(right.resourcePath))
@@ -408,6 +421,7 @@ function renderResult() {
   const index = buildIndex();
   elements.summary.classList.remove("hidden");
   elements.mappings.classList.remove("hidden");
+  elements.resources.classList.remove("hidden");
   elements.diagnostics.classList.remove("hidden");
   elements.fileTitle.textContent = currentResult.file.name;
   elements.hashBadge.textContent = `SHA-256 ${currentResult.hash}`;
@@ -420,9 +434,94 @@ function renderResult() {
   elements.mappingCount.textContent = `${currentResult.mappings.length} 条`;
   elements.mappingRows.replaceChildren(...currentResult.mappings.map(mappingRow));
   elements.emptyMappings.classList.toggle("hidden", currentResult.mappings.length !== 0);
+  renderResourceTree();
   elements.diagnosticList.replaceChildren(...index.diagnostics.map((item) => {
     const row = document.createElement("li"); row.textContent = item; return row;
   }));
+}
+
+function renderResourceTree() {
+  if (!currentResult) return;
+  const resources = currentResult.resources || [];
+  const filter = elements.resourceFilter.value.trim().replaceAll("\\", "/").toLocaleLowerCase();
+  const matched = filter ? resources.filter((entry) => entry.path.toLocaleLowerCase().includes(filter)) : resources;
+  const visible = matched.slice(0, MAX_RESOURCE_TREE_ENTRIES);
+  const truncated = visible.length !== matched.length;
+
+  elements.resourceCount.textContent = truncated
+    ? `显示 ${visible.length} / ${matched.length}，共 ${resources.length} 个条目`
+    : filter ? `匹配 ${matched.length} / 共 ${resources.length} 个条目` : `${resources.length} 个条目`;
+  elements.resourceHint.textContent = truncated
+    ? `为避免浏览器因 ${matched.length} 个条目同时渲染而卡顿，目前仅显示前 ${MAX_RESOURCE_TREE_ENTRIES} 条；请继续输入路径缩小范围。`
+    : filter ? `正在按完整路径筛选“${elements.resourceFilter.value.trim()}”。` : "展开目录即可查看 PCK 的原始资源路径；“压缩”表示该条目不能直接由当前静态 JSON 解析器读取。";
+
+  elements.resourceTree.replaceChildren();
+  if (visible.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty";
+    empty.textContent = filter ? "没有匹配该路径的资源。" : "PCK 目录中没有资源条目。";
+    elements.resourceTree.append(empty);
+    return;
+  }
+  appendResourceBranch(elements.resourceTree, buildResourceTree(visible), 0);
+}
+
+function buildResourceTree(resources) {
+  const root = { directories: new Map(), files: [] };
+  for (const resource of resources) {
+    const segments = resource.path.split("/").filter(Boolean);
+    const fileName = segments.pop() || resource.path;
+    let branch = root;
+    for (const segment of segments) {
+      if (!branch.directories.has(segment)) branch.directories.set(segment, { directories: new Map(), files: [] });
+      branch = branch.directories.get(segment);
+    }
+    branch.files.push({ ...resource, fileName });
+  }
+  return root;
+}
+
+function appendResourceBranch(parent, branch, depth) {
+  const directories = [...branch.directories.entries()].sort(([left], [right]) => left.localeCompare(right));
+  for (const [name, child] of directories) {
+    const details = document.createElement("details");
+    details.open = depth < 1;
+    const summary = document.createElement("summary");
+    summary.textContent = `${name}/`;
+    details.append(summary);
+    appendResourceBranch(details, child, depth + 1);
+    parent.append(details);
+  }
+  const files = [...branch.files].sort((left, right) => left.fileName.localeCompare(right.fileName));
+  for (const resource of files) {
+    const row = document.createElement("div");
+    row.className = `resource-file${resource.compressed ? " is-compressed" : ""}`;
+    row.title = resource.path;
+    const name = document.createElement("span");
+    name.textContent = resource.fileName;
+    row.append(name);
+    if (resource.compressed) {
+      const tag = document.createElement("span");
+      tag.className = "resource-tag";
+      tag.textContent = "压缩";
+      row.append(tag);
+    }
+    const meta = document.createElement("span");
+    meta.className = "resource-meta";
+    meta.textContent = formatBytes(resource.size);
+    row.append(meta);
+    parent.append(row);
+  }
+}
+
+function formatBytes(size) {
+  if (!Number.isFinite(size) || size < 0) return "大小未知";
+  if (size < 1024) return `${size} B`;
+  const units = ["KiB", "MiB", "GiB"];
+  let value = size / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
 }
 
 function metric(value, label) { const node = document.createElement("div"); node.className = "metric"; node.innerHTML = `<strong>${value}</strong><span>${label}</span>`; return node; }
@@ -450,4 +549,4 @@ async function copyIndex() {
 
 function safeFileName(value) { return String(value).replace(/[^a-z0-9._-]+/gi, "_").replace(/^_+|_+$/g, "") || "card-art-index"; }
 function setStatus(message, error = false) { elements.status.textContent = message; elements.status.classList.toggle("error", error); }
-function hideResults() { elements.summary.classList.add("hidden"); elements.mappings.classList.add("hidden"); elements.diagnostics.classList.add("hidden"); }
+function hideResults() { elements.summary.classList.add("hidden"); elements.mappings.classList.add("hidden"); elements.resources.classList.add("hidden"); elements.diagnostics.classList.add("hidden"); }
