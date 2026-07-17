@@ -55,8 +55,6 @@ const elements = {
   resourcePreviewBody: document.querySelector("#resourcePreviewBody"),
   resourcePreviewClose: document.querySelector("#resourcePreviewClose"),
   diagnosticList: document.querySelector("#diagnostics"),
-  download: document.querySelector("#downloadButton"),
-  downloadResources: document.querySelector("#downloadResourcesButton"),
   copy: document.querySelector("#copyButton")
 };
 
@@ -91,8 +89,6 @@ elements.resourceFilter.addEventListener("input", renderResourceTree);
 elements.mappingPrev.addEventListener("click", () => { mappingPage -= 1; renderMappingTable(); });
 elements.mappingNext.addEventListener("click", () => { mappingPage += 1; renderMappingTable(); });
 elements.resourcePreviewClose.addEventListener("click", closeResourcePreview);
-elements.download.addEventListener("click", downloadIndex);
-elements.downloadResources.addEventListener("click", downloadResourcesZip);
 elements.copy.addEventListener("click", copyIndex);
 
 async function loadModFolder(fileList) {
@@ -875,10 +871,20 @@ function downloadIndex() {
   link.click(); URL.revokeObjectURL(link.href);
 }
 
-async function copyIndex() {
+async function legacyCopyIndex() {
   const index = buildIndex(); if (!index) return;
   try { await navigator.clipboard.writeText(JSON.stringify(index, null, 2)); setStatus("索引 JSON 已复制到剪贴板。"); }
   catch { setStatus("浏览器不允许写入剪贴板，请使用下载按钮。", true); }
+}
+
+async function copyIndex() {
+  const index = buildIndex(); if (!index) return;
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(index, null, 2));
+    setStatus("索引 JSON 已复制到剪贴板；该页面不提供下载。 ");
+  } catch {
+    setStatus("浏览器不允许写入剪贴板；该页面已禁用下载功能。", true);
+  }
 }
 
 function safeFileName(value) { return String(value).replace(/[^a-z0-9._-]+/gi, "_").replace(/^_+|_+$/g, "") || "card-art-index"; }
