@@ -2,6 +2,7 @@
 
 const PCK_MAGIC = 0x43504447;
 const PCK_BASE_OFFSET = 0x70;
+const PCK_FLAG_REL_FILEBASE = 1 << 1;
 const MAX_FILE_SIZE = 768 * 1024 * 1024;
 const MAX_JSON_FILES = 96;
 const MAX_JSON_BYTES = 1024 * 1024;
@@ -228,6 +229,7 @@ function parsePck(buffer) {
     throw new Error("不是有效的 Godot PCK 文件。");
   }
   const directoryOffset = readU64(view, 0x20);
+  const offsetsAreRelative = (view.getUint32(0x14, true) & PCK_FLAG_REL_FILEBASE) !== 0;
   if (directoryOffset > view.byteLength - 4) throw new Error("PCK 目录偏移无效。");
 
   let cursor = directoryOffset;
@@ -250,7 +252,7 @@ function parsePck(buffer) {
     const size = readU64(view, cursor + 8);
     const flags = view.getUint32(cursor + 32, true);
     cursor += 36;
-    const absoluteOffset = PCK_BASE_OFFSET + offset;
+    const absoluteOffset = offsetsAreRelative ? PCK_BASE_OFFSET + offset : offset;
     if (size > Number.MAX_SAFE_INTEGER || absoluteOffset > view.byteLength || size > view.byteLength - absoluteOffset) {
       throw new Error(`PCK 条目范围无效：${path || index}`);
     }
